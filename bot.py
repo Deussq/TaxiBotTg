@@ -20,11 +20,12 @@ import os
 load_dotenv()
 
 TOKEN = os.getenv("TOKEN")
-YOUR_USERNAME = os.getenv("YOUR_USERNAME")  
+YOUR_USERNAME = os.getenv("YOUR_USERNAME")
 DRIVERS = list(map(int, os.getenv("DRIVERS").split(",")))
 
 
-orders = {}  
+orders = {} 
+
 
 
 def start_kb():
@@ -46,7 +47,7 @@ def active_kb():
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🚕 Добро пожаловать! Нажмите кнопку ниже:",
+        "🚕 Добро пожаловать!",
         reply_markup=start_kb()
     )
 
@@ -79,15 +80,14 @@ ID: {user.id}
 
     if not user.username:
         await update.message.reply_text(
-            "⚠️ У вас нет username в Telegram.\n"
-            "Свяжитесь с водителем напрямую:",
+            "⚠️ У вас нет username.\nСвяжитесь с водителем вручную:",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("📞 Написать водителю", url=f"https://t.me/{YOUR_USERNAME}")]
             ])
         )
 
     await update.message.reply_text(
-        "✅ Заказ принят! Ожидайте водителя.",
+        "✅ Заказ отправлен. Ждите водителя.",
         reply_markup=active_kb()
     )
 
@@ -102,7 +102,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for d in DRIVERS:
             await context.bot.send_message(
                 d,
-                f"❌ ЗАКАЗ ОТМЕНЁН\nИмя: {user.first_name}\nID: {user.id}"
+                f"❌ ЗАКАЗ ОТМЕНЁН\n{user.first_name} ({user.id})"
             )
 
     await update.message.reply_text(
@@ -116,11 +116,17 @@ async def location(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.message.from_user
 
     if user.id not in orders:
-        await update.message.reply_text("❗ Сначала сделайте заказ")
+        await update.message.reply_text("❗ Сначала создайте заказ")
         return
 
-    if orders[user.id]["status"] != "accepted":
+    order = orders[user.id]
+
+    if order["status"] != "accepted":
         await update.message.reply_text("❗ Водитель ещё не принял заказ")
+        return
+
+    if order["status"] == "finished":
+        await update.message.reply_text("📍 Вы уже отправили локацию")
         return
 
     loc = update.message.location
@@ -147,31 +153,34 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     client_id = int(client_id)
 
     if client_id not in orders:
-        await query.edit_message_text("⚠️ Заказ уже неактуален")
+        await query.edit_message_text("⚠️ Заказ неактуален")
+        return
+
+    order = orders[client_id]
+
+
+    if order["status"] == "accepted":
+        if order["driver_id"] == query.from_user.id:
+            await query.answer("Вы уже приняли этот заказ")
+        else:
+            await query.answer("🚫 Уже принят другим водителем", show_alert=True)
         return
 
 
     if action == "accept":
-        orders[client_id]["status"] = "accepted"
-        orders[client_id]["driver_id"] = query.from_user.id
+        order["status"] = "accepted"
+        order["driver_id"] = query.from_user.id
 
         await context.bot.send_message(
             client_id,
             f"🚗 Водитель принял заказ!\n👤 {query.from_user.first_name}"
         )
 
-        await query.edit_message_text("✅ Принято")
+        await query.edit_message_text("✅ Вы приняли заказ")
 
 
     elif action == "reject":
-        orders.pop(client_id)
-
-        await context.bot.send_message(
-            client_id,
-            "❌ Водитель отклонил заказ.\nПопробуйте снова."
-        )
-
-        await query.edit_message_text("❌ Отклонено")
+        await query.answer("Вы отклонили заказ")
 
 
 
@@ -183,7 +192,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif text == "❌ Отменить заказ":
         await cancel(update, context)
-
 
 
 app = ApplicationBuilder().token(TOKEN).build()
