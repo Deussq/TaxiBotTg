@@ -3,7 +3,7 @@ from telegram import (
     ReplyKeyboardMarkup,
     KeyboardButton,
     InlineKeyboardMarkup,
-    InlineKeyboardButton
+    InlineKeyboardButton,
 )
 from telegram.ext import (
     ApplicationBuilder,
@@ -11,11 +11,10 @@ from telegram.ext import (
     MessageHandler,
     CallbackQueryHandler,
     filters,
-    ContextTypes
+    ContextTypes,
 )
 from dotenv import load_dotenv
 import os
-
 
 load_dotenv()
 
@@ -23,15 +22,15 @@ TOKEN = os.getenv("TOKEN")
 YOUR_USERNAME = os.getenv("YOUR_USERNAME")
 DRIVERS = list(map(int, os.getenv("DRIVERS").split(",")))
 
-
 orders = {}
 order_counter = 1
 
 
-
 def start_kb():
     return ReplyKeyboardMarkup(
-        [[KeyboardButton("🚕 Заказать такси")]],
+        [
+            [KeyboardButton("🚕 Заказать такси")]
+        ],
         resize_keyboard=True
     )
 
@@ -39,22 +38,54 @@ def start_kb():
 def active_kb():
     return ReplyKeyboardMarkup(
         [
-            [KeyboardButton("📍 Отправить локацию", request_location=True)],
-            [KeyboardButton("❌ Отменить заказ")]
+            [
+                KeyboardButton(
+                    "📍 Отправить локацию",
+                    request_location=True
+                )
+            ],
+            [
+                KeyboardButton("❌ Отменить заказ")
+            ]
         ],
-        resize_keyboard=True
-    )
-
-
-def cancel_only_kb():
-    return ReplyKeyboardMarkup(
-        [[KeyboardButton("❌ Отменить заказ")]],
         resize_keyboard=True
     )
 
 
 def driver_kb(order_id):
     return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(
+                "🚗 Выехал",
+                callback_data=f"onway_{order_id}"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "⏱ 3 мин",
+                callback_data=f"eta_3_{order_id}"
+            ),
+            InlineKeyboardButton(
+                "⏱ 5 мин",
+                callback_data=f"eta_5_{order_id}"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "⏱ 10 мин",
+                callback_data=f"eta_10_{order_id}"
+            ),
+            InlineKeyboardButton(
+                "⏱ 15+ мин",
+                callback_data=f"eta_15+_{order_id}"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "🚗 Завершить поездку",
+                callback_data=f"finish_{order_id}"
+            )
+        ],
         [
             InlineKeyboardButton(
                 "❌ Отменить заказ",
@@ -64,13 +95,12 @@ def driver_kb(order_id):
     ])
 
 
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🚕 Добро пожаловать!\nНажмите кнопку ниже:",
+        "🚕 Добро пожаловать!\n\n"
+        "Нажмите кнопку ниже, чтобы заказать поездку.",
         reply_markup=start_kb()
     )
-
 
 
 async def create_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -84,7 +114,7 @@ async def create_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
             and order["status"] not in ["cancelled", "finished"]
         ):
             await update.message.reply_text(
-                "⚠️ У вас уже есть активный заказ",
+                "⚠️ У вас уже есть активный заказ.",
                 reply_markup=active_kb()
             )
             return
@@ -96,7 +126,7 @@ async def create_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "client_id": user.id,
         "status": "new",
         "driver_id": None,
-        "location_sent": False
+        "location_sent": False,
     }
 
     keyboard = InlineKeyboardMarkup([
@@ -114,246 +144,488 @@ async def create_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
     ])
 
+    username = (
+        f"@{user.username}"
+        if user.username
+        else "нет"
+    )
+
     msg = (
         f"🚨 НОВЫЙ ЗАКАЗ #{order_id}\n\n"
         f"👤 Имя: {user.first_name}\n"
         f"🆔 ID: {user.id}\n"
-        f"👤 Username: "
-        f"@{user.username if user.username else 'нет'}"
+        f"👤 Username: {username}"
     )
 
     for driver in DRIVERS:
-        await context.bot.send_message(
-            driver,
-            msg,
-            reply_markup=keyboard
-        )
-
-
-    if not user.username:
-        await update.message.reply_text(
-            "⚠️ У вас нет username в Telegram.\n\n"
-            "Пожалуйста, свяжитесь с водителем сами:",
-            reply_markup=InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton(
-                        "📞 Написать водителю",
-                        url=f"https://t.me/{YOUR_USERNAME}"
-                    )
-                ]
-            ])
-        )
+        try:
+            await context.bot.send_message(
+                chat_id=driver,
+                text=msg,
+                reply_markup=keyboard
+            )
+        except Exception as e:
+            print(
+                f"Ошибка отправки заказа водителю {driver}: {e}"
+            )
 
     await update.message.reply_text(
-        f"✅ Заказ #{order_id} создан.\n"
-        f"Ожидайте принятия водителем.",
+        f"✅ Заказ #{order_id} создан.\n\n"
+        f"⏳ Ищем водителя...",
         reply_markup=active_kb()
     )
 
 
+def parse_callback(data: str):
+    parts = data.split("_")
 
-async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    parts = query.data.split("_")
-
+    if parts[0] == "eta":
+        return (
+            "eta",
+            parts[1],
+            int(parts[2])
+        )
 
     if parts[0] == "driver":
-        action = "driver_cancel"
+        action = f"{parts[0]}_{parts[1]}"
         order_id = int(parts[2])
-    else:
-        action = parts[0]
-        order_id = int(parts[1])
+        return action, None, order_id
+
+    action = parts[0]
+    order_id = int(parts[1])
+
+    return action, None, order_id
+
+
+async def callback(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+    query = update.callback_query
+    data = query.data
+
+    action, extra, order_id = parse_callback(data)
 
     if order_id not in orders:
         await query.answer(
-            "⚠️ Заказ уже неактуален",
+            "⚠️ Заказ уже неактуален.",
             show_alert=True
         )
         return
 
     order = orders[order_id]
+    driver_id = query.from_user.id
 
-
-    if (
-        order["status"] == "accepted"
-        and action != "driver_cancel"
-    ):
-        if order["driver_id"] == query.from_user.id:
-            await query.answer(
-                "Вы уже приняли этот заказ"
-            )
-        else:
-            await query.answer(
-                "🚫 Заказ уже принят другим водителем",
-                show_alert=True
-            )
+    if driver_id not in DRIVERS:
+        await query.answer(
+            "🚫 У вас нет прав водителя.",
+            show_alert=True
+        )
         return
 
-
     if action == "accept":
+        if order["status"] != "new":
+            await query.answer(
+                "🚫 Этот заказ уже принят другим водителем.",
+                show_alert=True
+            )
+            return
 
+        if order["driver_id"] is not None:
+            await query.answer(
+                "🚫 Этот заказ уже занят.",
+                show_alert=True
+            )
+            return
+
+        order["driver_id"] = driver_id
         order["status"] = "accepted"
-        order["driver_id"] = query.from_user.id
 
-        await context.bot.send_message(
-            order["client_id"],
-            "🚗 Водитель принял заказ!\n\n"
-            "📍 Теперь отправьте локацию.",
-            reply_markup=active_kb()
-        )
+        try:
+            await context.bot.send_message(
+                chat_id=order["client_id"],
+                text=(
+                    "🚗 Водитель принял заказ!\n\n"
+                    "📍 Теперь отправьте вашу локацию."
+                ),
+                reply_markup=active_kb()
+            )
+        except Exception as e:
+            print(
+                f"Ошибка отправки сообщения клиенту: {e}"
+            )
 
         await query.edit_message_text(
-            f"✅ Вы приняли заказ #{order_id}",
+            text=(
+                f"✅ Вы приняли заказ #{order_id}\n\n"
+                f"👤 Клиент: ID {order['client_id']}\n\n"
+                f"Ожидайте локацию клиента."
+            ),
             reply_markup=driver_kb(order_id)
         )
 
+        await query.answer(
+            "✅ Заказ принят!"
+        )
 
-    elif action == "reject":
+        for other_driver in DRIVERS:
+            if other_driver == driver_id:
+                continue
+
+            try:
+                await context.bot.send_message(
+                    chat_id=other_driver,
+                    text=(
+                        f"🚫 Заказ #{order_id} уже принят "
+                        f"другим водителем."
+                    )
+                )
+            except Exception as e:
+                print(
+                    f"Ошибка уведомления водителя "
+                    f"{other_driver}: {e}"
+                )
+
+        return
+
+    protected_actions = [
+        "onway",
+        "eta",
+        "finish",
+        "driver_cancel",
+    ]
+
+    if action in protected_actions:
+        if order["driver_id"] != driver_id:
+            await query.answer(
+                "🚫 Этот заказ принят другим водителем.",
+                show_alert=True
+            )
+            return
+
+    if action == "reject":
+        if order["status"] != "new":
+            await query.answer(
+                "⚠️ Заказ уже неактуален.",
+                show_alert=True
+            )
+            return
+
+        await query.edit_message_text(
+            f"❌ Вы отклонили заказ #{order_id}"
+        )
+
+        await query.answer(
+            "Заказ отклонён."
+        )
+
+        return
+
+    if action == "onway":
+        if order["status"] != "accepted":
+            await query.answer(
+                "⚠️ Сейчас нельзя отметить выезд.",
+                show_alert=True
+            )
+            return
+
+        order["status"] = "on_way"
 
         await context.bot.send_message(
-            order["client_id"],
-            "❌ Водитель отклонил заказ.\n"
-            "Пожалуйста, закажите заново.",
+            chat_id=order["client_id"],
+            text="🚗 Водитель уже едет к вам!"
+        )
+
+        await query.edit_message_text(
+            text=(
+                f"🚗 Вы выехали к клиенту\n\n"
+                f"Заказ #{order_id}"
+            ),
+            reply_markup=driver_kb(order_id)
+        )
+
+        await query.answer(
+            "🚗 Статус изменён: вы в пути."
+        )
+
+        return
+
+    if action == "eta":
+        if order["status"] not in ["accepted", "on_way"]:
+            await query.answer(
+                "⚠️ Сейчас нельзя установить ETA.",
+                show_alert=True
+            )
+            return
+
+        order["status"] = "on_way"
+
+        await context.bot.send_message(
+            chat_id=order["client_id"],
+            text=(
+                f"⏱ Водитель приедет "
+                f"примерно через {extra} минут."
+            )
+        )
+
+        await query.edit_message_text(
+            text=(
+                f"⏱ ETA: {extra} мин.\n\n"
+                f"Заказ #{order_id}"
+            ),
+            reply_markup=driver_kb(order_id)
+        )
+
+        await query.answer(
+            f"ETA установлено: {extra} мин."
+        )
+
+        return
+
+    if action == "finish":
+        if order["status"] != "on_way":
+            await query.answer(
+                "⚠️ Сначала водитель должен быть в пути.",
+                show_alert=True
+            )
+            return
+
+        await context.bot.send_message(
+            chat_id=order["client_id"],
+            text=(
+                "🏁 Поездка завершена.\n\n"
+                "Спасибо ❤️"
+            ),
             reply_markup=start_kb()
         )
 
-        del orders[order_id]
-
         await query.edit_message_text(
-            f"❌ Заказ #{order_id} отклонён"
+            text=f"✅ Поездка завершена #{order_id}"
         )
 
+        order["status"] = "finished"
 
-    elif action == "driver_cancel":
+        await query.answer(
+            "🏁 Поездка завершена."
+        )
 
-        client_id = order["client_id"]
+        return
+
+    if action == "driver_cancel":
+        if order["status"] not in ["accepted", "on_way"]:
+            await query.answer(
+                "⚠️ Этот заказ уже неактуален.",
+                show_alert=True
+            )
+            return
 
         await context.bot.send_message(
-            client_id,
-            "❌ Водитель отменил заказ.\n\n"
-            "Пожалуйста, закажите такси заново.",
+            chat_id=order["client_id"],
+            text=(
+                "❌ Водитель отменил заказ.\n\n"
+                "Вы можете заказать поездку снова."
+            ),
             reply_markup=start_kb()
         )
 
-        del orders[order_id]
+        order["status"] = "cancelled"
 
         await query.edit_message_text(
-            f"❌ Заказ #{order_id} отменён водителем"
+            text=f"❌ Заказ #{order_id} отменён водителем."
         )
 
+        await query.answer(
+            "Заказ отменён."
+        )
+
+        return
 
 
-async def location(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def location(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
     user = update.message.from_user
 
-    for oid, order in list(orders.items()):
+    for oid, order in orders.items():
 
-        if order["client_id"] == user.id:
+        if order["client_id"] != user.id:
+            continue
 
-            if order["status"] != "accepted":
-                await update.message.reply_text(
-                    "⏳ Водитель ещё не принял заказ",
-                    reply_markup=active_kb()
-                )
-                return
+        if order["status"] not in ["accepted", "on_way"]:
+            continue
 
-            if order["location_sent"]:
-                await update.message.reply_text(
-                    "📍 Вы уже отправили локацию",
-                    reply_markup=cancel_only_kb()
-                )
-                return
+        if order["location_sent"]:
+            await update.message.reply_text(
+                "📍 Ваша локация уже была отправлена."
+            )
+            return
 
-            loc = update.message.location
+        loc = update.message.location
+        driver_id = order["driver_id"]
 
-            msg = (
+        if driver_id is None:
+            await update.message.reply_text(
+                "⚠️ Водитель ещё не назначен."
+            )
+            return
+
+        maps_url = (
+            f"https://www.google.com/maps"
+            f"?q={loc.latitude},{loc.longitude}"
+        )
+
+        await context.bot.send_location(
+            chat_id=driver_id,
+            latitude=loc.latitude,
+            longitude=loc.longitude
+        )
+
+        await context.bot.send_message(
+            chat_id=driver_id,
+            text=(
                 f"📍 ЛОКАЦИЯ КЛИЕНТА\n\n"
-                f"Заказ #{oid}\n"
-                f"https://www.google.com/maps?q="
-                f"{loc.latitude},{loc.longitude}"
+                f"🚕 Заказ #{oid}\n\n"
+                f"🗺 Открыть карту:\n"
+                f"{maps_url}"
             )
+        )
 
-            for driver in DRIVERS:
-                await context.bot.send_message(
-                    driver,
-                    msg
-                )
+        order["location_sent"] = True
 
-            order["location_sent"] = True
+        await update.message.reply_text(
+            "✅ Локация отправлена водителю."
+        )
 
-            await update.message.reply_text(
-                "✅ Локация отправлена водителю",
-                reply_markup=cancel_only_kb()
-            )
-            return
+        return
 
     await update.message.reply_text(
-        "⚠️ У вас нет активного заказа.\n"
-        "Создайте новый 👇",
-        reply_markup=start_kb()
+        "⚠️ У вас нет активного заказа."
     )
 
 
-
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def cancel(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
     user = update.message.from_user
 
     for oid, order in list(orders.items()):
 
-        if order["client_id"] == user.id:
+        if order["client_id"] != user.id:
+            continue
 
-            for driver in DRIVERS:
+        if order["status"] in ["finished", "cancelled"]:
+            continue
+
+        driver_id = order["driver_id"]
+
+        if driver_id is not None:
+            try:
                 await context.bot.send_message(
-                    driver,
-                    f"❌ Клиент "
-                    f"{user.first_name} "
-                    f"отменил заказ #{oid}"
+                    chat_id=driver_id,
+                    text=f"❌ Клиент отменил заказ #{oid}."
+                )
+            except Exception as e:
+                print(
+                    f"Ошибка уведомления водителя: {e}"
                 )
 
-            del orders[oid]
+        else:
+            for driver in DRIVERS:
+                try:
+                    await context.bot.send_message(
+                        chat_id=driver,
+                        text=f"❌ Клиент отменил заказ #{oid}."
+                    )
+                except Exception as e:
+                    print(
+                        f"Ошибка уведомления водителя "
+                        f"{driver}: {e}"
+                    )
 
-            await update.message.reply_text(
-                "❌ Заказ отменён",
-                reply_markup=start_kb()
-            )
-            return
+        order["status"] = "cancelled"
+
+        await update.message.reply_text(
+            f"❌ Заказ #{oid} отменён.",
+            reply_markup=start_kb()
+        )
+
+        return
 
     await update.message.reply_text(
-        "⚠️ У вас нет активного заказа",
+        "ℹ️ У вас нет активного заказа.",
         reply_markup=start_kb()
     )
 
 
-
-async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def text_handler(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
     text = update.message.text
 
     if text == "🚕 Заказать такси":
-        await create_order(update, context)
+        await create_order(
+            update,
+            context
+        )
 
     elif text == "❌ Отменить заказ":
-        await cancel(update, context)
+        await cancel(
+            update,
+            context
+        )
 
 
+def main():
+    if not TOKEN:
+        raise ValueError(
+            "❌ Не найден TOKEN в .env"
+        )
 
-app = ApplicationBuilder().token(TOKEN).build()
+    if not DRIVERS:
+        raise ValueError(
+            "❌ Список DRIVERS пуст"
+        )
 
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CallbackQueryHandler(callback))
-app.add_handler(
-    MessageHandler(
-        filters.TEXT & ~filters.COMMAND,
-        text_handler
+    app = (
+        ApplicationBuilder()
+        .token(TOKEN)
+        .build()
     )
-)
-app.add_handler(
-    MessageHandler(
-        filters.LOCATION,
-        location
-    )
-)
 
-print("🚕 Бот запущен")
-app.run_polling()
+    app.add_handler(
+        CommandHandler(
+            "start",
+            start
+        )
+    )
+
+    app.add_handler(
+        CallbackQueryHandler(
+            callback
+        )
+    )
+
+    app.add_handler(
+        MessageHandler(
+            filters.LOCATION,
+            location
+        )
+    )
+
+    app.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            text_handler
+        )
+    )
+
+    print("🚕 Бот запущен")
+
+    app.run_polling()
+
+
+if __name__ == "__main__":
+    main()
